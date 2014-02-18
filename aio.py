@@ -7,25 +7,30 @@ from time import sleep
 
 class unit(object):
 
-    onewire_pin = None
-    onewire_addr = None
-    lcd_addr = None
+    onewire = None
+    lcd = None
+    device = None
+    aid = None
+    db = None
 
     def __init__(self, device):
 
-        if device == '':
+        if device is None:
 
             print 'Need device'
 
         else:
+            self.device = device
 
             try:
                 serial_manager.connect(device)
+                pass
+
             except:
                 print 'Connection failed to %s' % device
 
     def lcd(self, data):
-        lcd = Lcd((self.lcd_addr[0:6]), (self.lcd_addr[6:8]))
+        lcd = Lcd((self.lcdr[0:6]), (self.lcd[6:8]))
 
         try:
             for index, item in enumerate(data):
@@ -38,24 +43,22 @@ class unit(object):
                     print 'To many rows to print, max 4'
 
         except:
-            print 'Failed to write %s to addr %s' % data, self.lcd_addr
+            print 'Failed to write %s to addr %s' % data, self.lcd
 
     def gettemp(self):
-
         tempC = {}
-
         try:
-            for item in self.onewire_addr:
+            for item in self.onewire:
 
                 data = []
 
-                one = OneWire(self.onewire_pin)
+                one = OneWire(item[1])
                 one.reset()
-                one.select(item)
+                one.select(item[0])
                 one.write(0x44, 1)
                 sleep(float(750) / 1000)
                 one.reset()
-                one.select(item)
+                one.select(item[0])
                 one.write(0xBE)
 
                 for i in range(9):
@@ -63,7 +66,7 @@ class unit(object):
                     data.append(val)
 
                 raw = (data[1] << 8) | data[0]
-                """ leftshit data[1], binary OR data[0]
+                """ leftshift data[1], binary OR data[0]
                 """
                 cfg = (data[4] & 0x60)
 
@@ -74,14 +77,13 @@ class unit(object):
                 elif cfg == 0x40:
                     raw = raw << 1
 
-                tempC[str(item)] = (raw / 16.0)
+                tempC[str(item[0])] = (raw / 16.0)
 
                 one = None
                 """ Need this to reset the OneWire instance so a new
-                               read can be performed.
+                    read can be performed.
                 """
 
         except:
                 print 'Could not read sensordata'
-
         return tempC
