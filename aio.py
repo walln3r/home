@@ -3,34 +3,27 @@
 
 from nanpy import OneWire, Lcd, serial_manager
 from time import sleep
+import dbcon
 
 
 class unit(object):
 
-    onewire = None
+    onewire = []
     lcd = None
     device = None
     aid = None
-    db = None
 
-    def __init__(self, device):
-
-        if device is None:
-
-            print 'Need device'
-
-        else:
-            self.device = device
+    def __init__(self):
 
             try:
-                serial_manager.connect(device)
                 pass
 
             except:
-                print 'Connection failed to %s' % device
+                print 'Connection failed to %s' % self.device
 
     def lcd(self, data):
-        lcd = Lcd((self.lcdr[0:6]), (self.lcd[6:8]))
+        serial_manager.connect(self.device)
+        lcd = Lcd((self.lcd[0:6]), (self.lcd[6:8]))
 
         try:
             for index, item in enumerate(data):
@@ -46,6 +39,7 @@ class unit(object):
             print 'Failed to write %s to addr %s' % data, self.lcd
 
     def gettemp(self):
+        serial_manager.connect(self.device)
         tempC = {}
         try:
             for item in self.onewire:
@@ -77,7 +71,7 @@ class unit(object):
                 elif cfg == 0x40:
                     raw = raw << 1
 
-                tempC[str(item[0])] = (raw / 16.0)
+                tempC[str(item[2])] = (raw / 16.0)
 
                 one = None
                 """ Need this to reset the OneWire instance so a new
@@ -86,4 +80,31 @@ class unit(object):
 
         except:
                 print 'Could not read sensordata'
+
         return tempC
+
+    @classmethod
+    def init(cls, device):
+        obj = cls()
+        obj.device = device
+
+        db = dbcon.connect()
+        cursor = db.cursor()
+
+        cursor.execute("SELECT id FROM units WHERE device =%s",
+                       (device,))
+        obj.aid = cursor.fetchone()[0]
+
+        cursor.execute("SELECT addr, pin, location FROM equipment WHERE"
+                       " id=%s and type=%s", (obj.aid, 'OneWire'))
+        for record in cursor:
+            obj.onewire.append(record)
+
+        cursor.execute("SELECT addr FROM equipment WHERE"
+                       " id=%s and type=%s", (obj.aid, 'Lcd'))
+        obj.lcd = cursor.fetchone()[0]
+
+        cursor.close()
+        db.close()
+
+        return obj
