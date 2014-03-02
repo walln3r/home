@@ -2,16 +2,69 @@
 
 
 from nanpy import OneWire, Lcd, serial_manager
+from datetime import datetime
 from time import sleep
 import dbcon
+
+
+class setup(object):
+
+    onewire_pin = 0
+    lcd = []
+    unit = {}
+    onewire = []
+    device = ''
+
+    def __init__(self, device):
+
+        try:
+
+            self.device = device
+
+            qone = self.axk('Search OneWire sensors? y/n', ('y', 'n'))
+            if qone == 'y':
+                self.onewire_pin = raw_input('OneWire pin: ')
+                self.onewire = self.searchonewire()
+
+            qlcd = self.axk('Add Lcd? y/n', ('y', 'n'))
+
+            if qlcd == 'y':
+                self.lcd = raw_input('Lcd pins: ')
+
+        except:
+            print 'Nope'
+
+    def searchonewire(self):
+        serial_manager.connect(self.device)
+        one = OneWire(self.onewire_pin)
+        search = ''
+        run = 0
+        result = {}
+        while True:
+            search = one.search()
+            if search == '1':
+                return result
+            else:
+                result[run] = {
+                    'addr': search
+                }
+                run += 1
+
+    def axk(self, quest, valid):
+        val = ''
+        while val not in valid:
+            print quest
+            val = raw_input(quest, ' : ')
+        return val
 
 
 class unit(object):
 
     onewire = []
-    lcd = None
+    Lcd = None
     device = None
     aid = None
+    autosave = True
 
     def __init__(self):
 
@@ -21,9 +74,9 @@ class unit(object):
             except:
                 print 'Connection failed to %s' % self.device
 
-    def lcd(self, data):
+    def lcdscreen(self, data):
         serial_manager.connect(self.device)
-        lcd = Lcd((self.lcd[0:6]), (self.lcd[6:8]))
+        lcd = Lcd((self.Lcd[0:6]), (self.Lcd[6:8]))
 
         try:
             for index, item in enumerate(data):
@@ -71,7 +124,11 @@ class unit(object):
                 elif cfg == 0x40:
                     raw = raw << 1
 
-                tempC[str(item[2])] = (raw / 16.0)
+                tempC[item[2]] = {
+                    'addr': item[0],
+                    'temp': ((raw / 16.0)),
+                    'time': datetime.today()
+                }
 
                 one = None
                 """ Need this to reset the OneWire instance so a new
@@ -81,10 +138,32 @@ class unit(object):
         except:
                 print 'Could not read sensordata'
 
+        if self.autosave:
+            self.wr(tempC)
+
+        else:
+            pass
+
         return tempC
 
+    def wr(self, data):
+        try:
+            db = dbcon.connect()
+            cursor = db.cursor()
+            for key in data:
+                cursor.execute("INSERT INTO sensordata (addr, data, time)"
+                               " VALUES (%s, %s, %s)",
+                              (data[key]['addr'], data[key]['temp'],
+                               data[key]['time']))
+
+            db.commit()
+            cursor.close()
+            db.close()
+        except:
+            print 'Failed to write %s to database', dict(data)
+
     @classmethod
-    def init(cls, device):
+    def device(cls, device):
         obj = cls()
         obj.device = device
 
@@ -102,7 +181,7 @@ class unit(object):
 
         cursor.execute("SELECT addr FROM equipment WHERE"
                        " id=%s and type=%s", (obj.aid, 'Lcd'))
-        obj.lcd = cursor.fetchone()[0]
+        obj.Lcd = cursor.fetchone()[0]
 
         cursor.close()
         db.close()
