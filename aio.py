@@ -2,9 +2,10 @@
 
 
 from nanpy import Arduino, OneWire, Lcd, serial_manager
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import sleep
 import dbcon
+import sys
 
 
 class setup(object):
@@ -68,7 +69,11 @@ class unit(object):
     Lcd = None
     device = None
     aid = None
-    autosave = True
+    autosave = False
+    apwm = False
+    backlight = False
+    timer1 = 0
+    timer2 = 0
     pwm_pin_state = {}
     tempC = {}
 
@@ -83,6 +88,13 @@ class unit(object):
 
     def lcdscreen(self, data):
         serial_manager.connect(self.device)
+
+        if self.apwm:
+
+            self.pwm(0, 250)
+
+            self.backlight = True
+
         lcd = Lcd((self.Lcd[1:7]), (self.Lcd[7:9]))
 
         try:
@@ -217,7 +229,7 @@ class unit(object):
 
         serial_manager.connect(self.device)
 
-        step = 5
+        step = 25
 
         if state < self.pwm_pin_state[val]['state']:
             step = -step
@@ -245,16 +257,21 @@ class unit(object):
         db = dbcon.connect()
         cursor = db.cursor()
 
-        cursor.execute("SELECT id FROM units WHERE device =%s",
+        cursor.execute("SELECT * FROM units WHERE device =%s",
                        (device,))
 
-        obj.aid = cursor.fetchone()[0]
+        arduino = cursor.fetchone()
+        obj.aid = arduino[0]
+        obj.autosave = arduino[3]
+        obj.apwm = arduino[4]
+        obj.timer1 = timedelta(seconds=arduino[5])
+        obj.timer2 = timedelta(seconds=arduino[6])
 
         cursor.execute("SELECT addr, pin, location FROM equipment WHERE"
                        " id=%s and type=%s", (obj.aid, 'OneWire'))
 
         for record in cursor:
-
+            print 'Onewire: ', record
             obj.onewire.append(record)
 
         try:
@@ -263,7 +280,7 @@ class unit(object):
                            " id=%s and type=%s", (obj.aid, 'Lcd'))
 
             obj.Lcd = cursor.fetchone()[0]
-
+            print 'Lcd: ', obj.Lcd
             cls.pwm_pin_state[0] = {
                 'pin': obj.Lcd[0],
                 'state': 0
@@ -280,18 +297,23 @@ class unit(object):
 
 def main():
 
-    device = ('/dev/ttyACM0')
+    device = sys.argv[1]
     a1 = unit.device(device)
-    run = 0
     oldlcdata = ''
 
+    owtimer = datetime.now() + a1.timer1
     while True:
+        print datetime.now(), 'Timer1: ', owtimer, '\n'
 
-        if run == 0:
+        if owtimer <= datetime.now():
+
+            print 'Get temp'
 
             a1.gettemp()
 
             a1.wrlcddata()
+
+            owtimer = datetime.now() + a1.timer1
 
         lcdata = a1.getlcddata()
         print 'GET lcdata: ', lcdata
@@ -300,25 +322,31 @@ def main():
 
             print 'Updating LCD'
 
-            a1.pwm(0, 255)
+            if not a1.apwm and any(a1.pwm_pin_state):
+
+                print 'PWM UP FROM MAIN'
+
+                a1.pwm(0, 250)
+
+                a1.backlight = True
 
             a1.lcdscreen(lcdata)
 
+            pwmtimer = datetime.now() + a1.timer2
+
+            print 'Setting PWM DOWN to: ', pwmtimer
+
             oldlcdata = lcdata
 
-        sleep(5)
+        if a1.backlight and pwmtimer <= datetime.now():
 
-        a1.pwm(0, 0)
+            print datetime.now(), 'PWM DOWN'
 
-        if run < 60:
+            a1.pwm(0, 0)
 
-            print 'Run: ', run
-            run += 1
+            a1.backlight = False
 
-        else:
-
-            run = 0
-            print 'Resetting run to: ', run
+        sleep(1)
 
 if __name__ == '__main__':
     main()
