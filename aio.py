@@ -70,30 +70,23 @@ class unit(object):
     device = None
     aid = None
     autosave = False
-    apwm = False
     backlight = False
     timer1 = 0
     timer2 = 0
+    lcd_pir = None
     pwm_pin_state = {}
     tempC = {}
+    _conn = None
 
     def __init__(self):
 
             try:
-#                serial_manager.connect(self.device)
                 pass
 
             except:
-                print 'Connection failed to %s' % self.device
+                print 'Connection failed to ', self.device
 
     def lcdscreen(self, data):
-        serial_manager.connect(self.device)
-
-        if self.apwm:
-
-            self.pwm(0, 250)
-
-            self.backlight = True
 
         lcd = Lcd((self.Lcd[1:7]), (self.Lcd[7:9]))
 
@@ -147,8 +140,6 @@ class unit(object):
         return result[0:4]
 
     def gettemp(self):
-        serial_manager.connect(self.device)
-        self.tempC = {}
 
         try:
             for item in self.onewire:
@@ -227,8 +218,6 @@ class unit(object):
 
     def pwm(self, val, state):
 
-        serial_manager.connect(self.device)
-
         step = 25
 
         if state < self.pwm_pin_state[val]['state']:
@@ -245,7 +234,11 @@ class unit(object):
             Arduino.analogWrite(self.pwm_pin_state[val]['pin'],
                                 self.pwm_pin_state[val]['state'])
 
-#           sleep(0.0001)
+    def dRead(self, pin):
+
+        Arduino.pinMode(pin, Arduino.INPUT)
+
+        return Arduino.digitalRead(pin)
 
     @classmethod
     def device(cls, device):
@@ -263,9 +256,8 @@ class unit(object):
         arduino = cursor.fetchone()
         obj.aid = arduino[0]
         obj.autosave = arduino[3]
-        obj.apwm = arduino[4]
-        obj.timer1 = timedelta(seconds=arduino[5])
-        obj.timer2 = timedelta(seconds=arduino[6])
+        obj.timer1 = timedelta(seconds=arduino[4])
+        obj.timer2 = timedelta(seconds=arduino[5])
 
         cursor.execute("SELECT addr, pin, location FROM equipment WHERE"
                        " id=%s and type=%s", (obj.aid, 'OneWire'))
@@ -281,17 +273,25 @@ class unit(object):
 
             obj.Lcd = cursor.fetchone()[0]
             print 'Lcd: ', obj.Lcd
-            cls.pwm_pin_state[0] = {
-                'pin': obj.Lcd[0],
-                'state': 0
-            }
+
+            if len(obj.Lcd) == 9:
+
+                cls.pwm_pin_state['lcd'] = {
+                    'pin': obj.Lcd[0],
+                    'state': 0
+                }
+
+            cursor.execute("SELECT pin FROM equipment WHERE"
+                           " id=%s and type=%s and addr=%s",
+                           (obj.aid, 'Pir', ['Lcd']))
+            obj.lcd_pir = cursor.fetchone()[0]
 
         except:
             pass
 
         cursor.close()
         db.close()
-
+        obj._conn = serial_manager.connect(obj.device)
         return obj
 
 
@@ -299,11 +299,16 @@ def main():
 
     device = sys.argv[1]
     a1 = unit.device(device)
-    oldlcdata = ''
-
     owtimer = datetime.now() + a1.timer1
+
+    lcdtimer = timedelta(seconds=5)
+    nextlcdupdate = datetime.now() + lcdtimer
+
     while True:
-        print datetime.now(), 'Timer1: ', owtimer, '\n'
+
+        print datetime.now()
+        print 'OneWire timer: ', owtimer
+        print 'Lcdupdate :', nextlcdupdate
 
         if owtimer <= datetime.now():
 
@@ -315,38 +320,82 @@ def main():
 
             owtimer = datetime.now() + a1.timer1
 
-        lcdata = a1.getlcddata()
-        print 'GET lcdata: ', lcdata
+        if nextlcdupdate <= datetime.now():
 
-        if lcdata != oldlcdata:
+            if updatelcd(a1):
 
-            print 'Updating LCD'
+                pwmtimer = datetime.now() + a1.timer2
 
-            if not a1.apwm and any(a1.pwm_pin_state):
+            nextlcdupdate = datetime.now() + lcdtimer
 
-                print 'PWM UP FROM MAIN'
+        if (
+            a1.lcd_pir is None and a1.backlight
+            and pwmtimer <= datetime.now()
+        ):
 
-                a1.pwm(0, 250)
+            print datetime.now(), 'PWM DOWN Timer expired'
 
-                a1.backlight = True
+            a1.pwm('lcd', 0)
 
-            a1.lcdscreen(lcdata)
+            a1.backlight = False
+
+        if a1.lcd_pir:
+
+            pirbacklight(a1)
+
+        sleep(1)
+
+
+def updatelcd(a1):
+
+    oldlcdata = ''
+
+    lcdata = a1.getlcddata()
+
+    print 'GET lcdata: ', lcdata
+
+    if lcdata != oldlcdata:
+
+        print 'Updating LCD'
+
+        if (a1.lcd_pir is None) & any(a1.pwm_pin_state):
+
+            print 'PWM UP ON UPDATE'
+
+            a1.pwm('lcd', 250)
+
+            a1.backlight = True
 
             pwmtimer = datetime.now() + a1.timer2
 
             print 'Setting PWM DOWN to: ', pwmtimer
 
-            oldlcdata = lcdata
+        a1.lcdscreen(lcdata)
 
-        if a1.backlight and pwmtimer <= datetime.now():
+        oldlcdata = lcdata
 
-            print datetime.now(), 'PWM DOWN'
+    return a1.backlight
 
-            a1.pwm(0, 0)
 
-            a1.backlight = False
+def pirbacklight(a1):
 
-        sleep(1)
+    pir_state = a1.dRead(a1.lcd_pir)
+
+    if (pir_state == 1 and (not a1.backlight)):
+
+        a1.pwm('lcd', 250)
+
+        a1.backlight = True
+
+        print 'Lcd backlight changed to: ', a1.backlight
+
+    elif (pir_state == 0 and a1.backlight):
+
+        a1.pwm('lcd', 0)
+
+        a1.backlight = False
+
+        print 'Lcd backlight changed to: ', a1.backlight
 
 if __name__ == '__main__':
     main()
