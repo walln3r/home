@@ -71,11 +71,12 @@ class unit(object):
     aid = None
     autosave = False
     backlight = False
-    timer1 = 0
-    timer2 = 0
+    temp_timer = 0
+    lcd_update_timer = 0
     lcd_pir = None
     pwm_pin_state = {}
     tempC = {}
+    _oldlcddata = None
     _conn = None
 
     def __init__(self):
@@ -240,6 +241,48 @@ class unit(object):
 
         return Arduino.digitalRead(pin)
 
+    def updatelcd(self):
+
+        lcddata = self.getlcddata()
+
+        if lcddata != self._oldlcddata:
+
+            if (
+                (self.lcd_pir is None) and
+                any(self.pwm_pin_state) and
+                (not self.backlight)
+            ):
+
+                self.pwm('lcd', 250)
+
+                self.backlight = True
+
+            self.lcdscreen(lcddata)
+
+            self._oldlcddata = lcddata
+
+        elif (self.lcd_pir is None) & (self.backlight):
+
+            self.pwm('lcd', 0)
+
+            self.backlight = False
+
+    def pirbacklight(self):
+
+        pir_state = self.dRead(self.lcd_pir)
+
+        if (pir_state == 1) and (not self.backlight):
+
+            self.pwm('lcd', 250)
+
+            self.backlight = True
+
+        elif (pir_state == 0 and self.backlight):
+
+            self.pwm('lcd', 0)
+
+            self.backlight = False
+
     @classmethod
     def device(cls, device):
 
@@ -256,8 +299,8 @@ class unit(object):
         arduino = cursor.fetchone()
         obj.aid = arduino[0]
         obj.autosave = arduino[3]
-        obj.timer1 = timedelta(seconds=arduino[4])
-        obj.timer2 = timedelta(seconds=arduino[5])
+        obj.temp_timer = timedelta(seconds=arduino[4])
+        obj.lcd_update_timer = timedelta(seconds=arduino[5])
 
         cursor.execute("SELECT addr, pin, location FROM equipment WHERE"
                        " id=%s and type=%s", (obj.aid, 'OneWire'))
@@ -299,16 +342,16 @@ def main():
 
     device = sys.argv[1]
     a1 = unit.device(device)
-    owtimer = datetime.now() + a1.timer1
 
-    lcdtimer = timedelta(seconds=5)
-    nextlcdupdate = datetime.now() + lcdtimer
+    owtimer = datetime.now() + a1.temp_timer
+
+    nextlcdupdate = datetime.now() + a1.lcd_update_timer
 
     while True:
 
         print datetime.now()
         print 'OneWire timer: ', owtimer
-        print 'Lcdupdate :', nextlcdupdate
+        print 'Next lcd update :', nextlcdupdate
 
         if owtimer <= datetime.now():
 
@@ -318,84 +361,20 @@ def main():
 
             a1.wrlcddata()
 
-            owtimer = datetime.now() + a1.timer1
+            owtimer = datetime.now() + a1.temp_timer
 
         if nextlcdupdate <= datetime.now():
 
-            if updatelcd(a1):
+            a1.updatelcd()
 
-                pwmtimer = datetime.now() + a1.timer2
-
-            nextlcdupdate = datetime.now() + lcdtimer
-
-        if (
-            a1.lcd_pir is None and a1.backlight
-            and pwmtimer <= datetime.now()
-        ):
-
-            print datetime.now(), 'PWM DOWN Timer expired'
-
-            a1.pwm('lcd', 0)
-
-            a1.backlight = False
+            nextlcdupdate = datetime.now() + a1.lcd_update_timer
 
         if a1.lcd_pir:
 
-            pirbacklight(a1)
+            a1.pirbacklight()
 
         sleep(1)
 
-
-def updatelcd(a1):
-
-    oldlcdata = ''
-
-    lcdata = a1.getlcddata()
-
-    print 'GET lcdata: ', lcdata
-
-    if lcdata != oldlcdata:
-
-        print 'Updating LCD'
-
-        if (a1.lcd_pir is None) & any(a1.pwm_pin_state):
-
-            print 'PWM UP ON UPDATE'
-
-            a1.pwm('lcd', 250)
-
-            a1.backlight = True
-
-            pwmtimer = datetime.now() + a1.timer2
-
-            print 'Setting PWM DOWN to: ', pwmtimer
-
-        a1.lcdscreen(lcdata)
-
-        oldlcdata = lcdata
-
-    return a1.backlight
-
-
-def pirbacklight(a1):
-
-    pir_state = a1.dRead(a1.lcd_pir)
-
-    if (pir_state == 1 and (not a1.backlight)):
-
-        a1.pwm('lcd', 250)
-
-        a1.backlight = True
-
-        print 'Lcd backlight changed to: ', a1.backlight
-
-    elif (pir_state == 0 and a1.backlight):
-
-        a1.pwm('lcd', 0)
-
-        a1.backlight = False
-
-        print 'Lcd backlight changed to: ', a1.backlight
 
 if __name__ == '__main__':
     main()
