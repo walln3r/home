@@ -8,59 +8,85 @@ import dbcon
 import sys
 
 
-class setup(object):
+class database(object):
 
-    """
-    This class is not in use or ready to be used
-    """
+    aid = None
 
-    onewire_pin = 0
-    lcd = []
-    unit = {}
-    onewire = []
-    device = ''
+    def __init__(self):
 
-    def __init__(self, device):
+            pass
+
+    def wr(self, data):
 
         try:
+            db = dbcon.connect()
+            cursor = db.cursor()
 
-            self.device = device
+            for key in data:
 
-            qone = self.axk('Search OneWire sensors? y/n', ('y', 'n'))
-            if qone == 'y':
-                self.onewire_pin = raw_input('OneWire pin: ')
-                self.onewire = self.searchonewire()
+                cursor.execute("INSERT INTO sensordata (addr, data, time)"
+                               " VALUES (%s, %s, %s)",
+                               (data[key]['addr'], data[key]['temp'],
+                                data[key]['time']))
 
-            qlcd = self.axk('Add Lcd? y/n', ('y', 'n'))
+                string = str(key) + ': ' + str(data[key]['temp'])
 
-            if qlcd == 'y':
-                self.lcd = raw_input('Lcd pins: ')
+                cursor.execute("INSERT INTO lcdata (aid, data) VALUES"
+                               "(%s, %s)", (self.aid, string))
+
+            db.commit()
+            cursor.close()
+            db.close()
 
         except:
-            print 'Nope'
+            print >> sys.stderr, 'Error in wr'
+            sys.exit(1)
 
-    def searchonewire(self):
-        serial_manager.connect(self.device)
-        one = OneWire(self.onewire_pin)
-        search = ''
-        run = 0
-        result = {}
-        while True:
-            search = one.search()
-            if search == '1':
-                return result
-            else:
-                result[run] = {
-                    'addr': search
-                }
-                run += 1
+    def getlcddata(self):
 
-    def axk(self, quest, valid):
-        val = ''
-        while val not in valid:
-            print quest
-            val = raw_input(quest, ' : ')
-        return val
+        db = dbcon.connect()
+        cursor = db.cursor()
+
+        result = []
+
+        cursor.execute("SELECT data FROM lcdata WHERE aid=%s", (str(self.aid)))
+
+        for row in cursor.fetchall():
+
+            result.append(row[0])
+
+        result.reverse()
+
+        cursor.close()
+        db.close()
+
+        return result[0:4]
+
+    @classmethod
+    def allid(cls):
+
+        result = []
+
+        db = dbcon.connect()
+        cursor = db.cursor()
+
+        cursor.execute("SELECT id FROM units")
+
+        for record in cursor:
+            obj = cls()
+            obj.aid = record[0]
+            result.append(obj)
+
+        return result
+
+    @classmethod
+    def fromid(cls, aid):
+
+        obj = cls()
+
+        obj.aid = aid
+
+        return obj
 
 
 class unit(object):
@@ -69,6 +95,7 @@ class unit(object):
     Lcd = None
     device = None
     aid = None
+    datab = None
     autosave = False
     backlight = False
     temp_timer = 0
@@ -103,42 +130,6 @@ class unit(object):
 
         except:
             print 'Failed to write %s to addr %s' % data, self.lcd
-
-    def wrlcddata(self):
-
-        db = dbcon.connect()
-        cursor = db.cursor()
-
-        for key in self.tempC:
-
-            string = str(key) + ': ' + str(self.tempC[key]['temp'])
-
-            cursor.execute("INSERT INTO lcdata (aid, data) VALUES"
-                           "(%s, %s)", (self.aid, string))
-            db.commit()
-
-        cursor.close()
-        db.close
-
-    def getlcddata(self):
-
-        db = dbcon.connect()
-        cursor = db.cursor()
-
-        result = []
-
-        cursor.execute("SELECT data FROM lcdata WHERE aid=%s", (str(self.aid)))
-
-        for row in cursor.fetchall():
-
-            result.append(row[0])
-
-        result.reverse()
-
-        cursor.close()
-        db.close()
-
-        return result[0:4]
 
     def gettemp(self):
 
@@ -191,31 +182,11 @@ class unit(object):
 
         if self.autosave:
 
-            self.wr(self.tempC)
+            self.datab.wr(self.tempC)
 
         else:
 
             pass
-
-    def wr(self, data):
-
-        try:
-            db = dbcon.connect()
-            cursor = db.cursor()
-
-            for key in data:
-
-                cursor.execute("INSERT INTO sensordata (addr, data, time)"
-                               " VALUES (%s, %s, %s)",
-                              (data[key]['addr'], data[key]['temp'],
-                               data[key]['time']))
-
-            db.commit()
-            cursor.close()
-            db.close()
-
-        except:
-            print 'Failed to write %s to database', dict(data)
 
     def pwm(self, val, state):
 
@@ -243,7 +214,7 @@ class unit(object):
 
     def updatelcd(self):
 
-        lcddata = self.getlcddata()
+        lcddata = self.datab.getlcddata()
 
         if lcddata != self._oldlcddata:
 
@@ -334,7 +305,10 @@ class unit(object):
 
         cursor.close()
         db.close()
+
         obj._conn = serial_manager.connect(obj.device)
+        obj.datab = database.fromid(obj.aid)
+
         return obj
 
 
@@ -358,8 +332,6 @@ def main():
             print 'Get temp'
 
             a1.gettemp()
-
-            a1.wrlcddata()
 
             owtimer = datetime.now() + a1.temp_timer
 
