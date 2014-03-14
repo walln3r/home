@@ -2,65 +2,323 @@
 
 
 from nanpy import Arduino, OneWire, Lcd, serial_manager
-from datetime import datetime, timedelta
+from datetime import datetime
 from time import sleep
+from psycopg2 import extras
+from redis import Redis
 import dbcon
-import sys
 
 
-class database(object):
+class aio(object):
 
-    aid = None
+    unit = {}
+    lcddata = []
+    old_lcddata = []
+    _con = None
+    _queue = None
 
     def __init__(self):
 
             pass
 
-    def wr(self, data):
+    def serialconnection(self):
 
-        try:
-            db = dbcon.connect()
-            cursor = db.cursor()
+        self._con = serial_manager.connect(self.unit['device'])
 
-            for key in data:
-
-                cursor.execute("INSERT INTO sensordata (addr, data, time)"
-                               " VALUES (%s, %s, %s)",
-                               (data[key]['addr'], data[key]['temp'],
-                                data[key]['time']))
-
-                string = str(key) + ': ' + str(data[key]['temp'])
-
-                cursor.execute("INSERT INTO lcdata (aid, data) VALUES"
-                               "(%s, %s)", (self.aid, string))
-
-            db.commit()
-            cursor.close()
-            db.close()
-
-        except:
-            print >> sys.stderr, 'Error in wr'
-            sys.exit(1)
-
-    def getlcddata(self):
+    def wr(self):
 
         db = dbcon.connect()
         cursor = db.cursor()
 
-        result = []
+        for key in self.unit['onewire']:
 
-        cursor.execute("SELECT data FROM lcdata WHERE aid=%s", (str(self.aid)))
+            cursor.execute("INSERT INTO sensordata (addr, data, time)"
+                           " VALUES (%s, %s, %s)",
+                           (self.unit['onewire'][key]['addr'],
+                            self.unit['onewire'][key]['temp'],
+                            self.unit['onewire'][key]['lastupdate']))
 
-        for row in cursor.fetchall():
+            toqueue = (self.unit['onewire'][key]['location'] + ':'
+                       ' ' + str(self.unit['onewire'][key]['temp']))
 
-            result.append(row[0])
+            self._queue.rpush(self.unit['id'], toqueue)
 
-        result.reverse()
+        db.commit()
+        cursor.close()
+        db.close()
+
+    def getlcddata(self):
+
+        while True:
+
+            row = self._queue.lpop(self.unit['id'])
+            if row is not None:
+                self.lcddata.insert(0, row)
+                print row
+            else:
+                try:
+                    self.lcddata = self.lcddata[0:4]
+                    break
+                except:
+                    break
+
+    def get_eq_arduino_device(self, aid):
+
+        a = {}
+
+        db = dbcon.connect()
+        cursor = db.cursor(cursor_factory=extras.DictCursor)
+
+        cursor.execute("SELECT * FROM unitts WHERE id =%s",
+                       (aid,))
+
+        for record in cursor:
+
+            a = {
+                'id': aid,
+                'location': record['location'],
+                'device': record['device'],
+            }
 
         cursor.close()
         db.close()
 
-        return result[0:4]
+        return a
+
+    def get_eq_arduino_id(self, device):
+
+        a = {}
+
+        db = dbcon.connect()
+        cursor = db.cursor(cursor_factory=extras.DictCursor)
+
+        cursor.execute("SELECT * FROM units WHERE device =%s",
+                       (device,))
+
+        for record in cursor:
+
+            a = {
+                'id': record['id'],
+                'location': record['location'],
+                'device': device,
+            }
+
+        cursor.close()
+        db.close()
+
+        return a
+
+    def get_eq_onewire(self):
+
+        db = dbcon.connect()
+        cursor = db.cursor(cursor_factory=extras.DictCursor)
+
+        onewire = {}
+
+        cursor.execute("SELECT room, location, addr, location, pin, power FROM"
+                       " equipment WHERE id=%s and type=%s",
+                       (self.unit['id'], 'OneWire'))
+
+        for index, record in enumerate(cursor):
+
+            onewire[index] = {
+                'room': record['room'],
+                'location': record['location'],
+                'addr': record['addr'],
+                'pin': record['pin'],
+                'power': record['power'],
+                'temp': None,
+                'lastupdate': None,
+            }
+
+        cursor.close()
+        db.close()
+
+        return onewire
+
+    def get_eq_lcd(self):
+
+        db = dbcon.connect()
+        cursor = db.cursor(cursor_factory=extras.DictCursor)
+
+        lcd = {}
+
+        cursor.execute("SELECT room, location, addr, pin FROM equipment"
+                       " WHERE id=%s and type=%s", (self.unit['id'], 'Lcd'))
+
+        for index, record in enumerate(cursor):
+
+            lcd[index] = {
+                'room': record['room'],
+                'location': record['location'],
+                'addr': record['addr'],
+                'backlightPin': record['pin'],
+                'backlightState': False,
+                'pwmState': 0,
+            }
+
+        cursor.close()
+        db.close()
+
+        return lcd
+
+    def get_eq_pir(self):
+
+        db = dbcon.connect()
+        cursor = db.cursor(cursor_factory=extras.DictCursor)
+
+        pir = {}
+
+        cursor.execute("SELECT room, location, addr, pin FROM equipment WHERE"
+                       " id=%s and type=%s ", (self.unit['id'], 'Pir', ))
+
+        for index, record in enumerate(cursor):
+
+            pir[index] = {
+                'room': record['room'],
+                'location': record['location'],
+                'addr': record['addr'],
+                'pin': record['pin'],
+                'state': None
+            }
+
+        cursor.close()
+        db.close()
+
+        return pir
+
+    def get_eq_servo(self):
+
+        db = dbcon.connect()
+        cursor = db.cursor(cursor_factory=extras.DictCursor)
+
+        servo = {}
+
+        cursor.execute("SELECT room, location, pin FROM equipment WHERE"
+                       " id=%s and type=%s ", (self.unit['id'], 'Servo', ))
+
+        for index, record in enumerate(cursor):
+
+            servo[index] = {
+                'room': record['room'],
+                'location': record['location'],
+                'pin': record['pin'],
+            }
+
+        cursor.close()
+        db.close()
+
+        return servo
+
+    def updatelcd(self):
+
+        self.getlcddata()
+
+        if self.lcddata != self.old_lcddata:
+
+            lcd = Lcd((self.unit['lcd'][0]['addr'][0:6]),
+                      (self.unit['lcd'][0]['addr'][6:8]))
+
+            for index, item in enumerate(self.lcddata):
+                if index < 4:
+
+                    lcd.setCursor(0, index)
+                    lcd.printString(item)
+
+                else:
+                    print 'To many rows to print, max 4'
+
+            if (
+                (not self.unit['pir']) and
+                (not self.unit['lcd'][0]['backlightState'])
+            ):
+                self.pwmLcdBacklight(250)
+
+            self.old_lcddata = self.lcddata
+
+        elif (
+            (not self.unit['pir']) and
+            (self.unit['lcd'][0]['backlightState'])
+        ):
+            self.pwmLcdBacklight(0)
+
+    def readonewire(self):
+
+        for key in self.unit['onewire']:
+
+            data = []
+
+            one = OneWire(self.unit['onewire'][key]['pin'])
+            one.reset()
+            one.select(self.unit['onewire'][key]['addr'])
+            one.write(0x44, 1)
+            sleep(float(750) / 1000)
+            one.reset()
+            one.select(self.unit['onewire'][key]['addr'])
+            one.write(0xBE)
+
+            for i in range(9):
+                val = one.read()
+                data.append(val)
+
+            raw = (data[1] << 8) | data[0]
+
+            cfg = (data[4] & 0x60)
+            if cfg == 0x00:
+                raw = raw << 3
+            elif cfg == 0x20:
+                raw = raw << 2
+            elif cfg == 0x40:
+                raw = raw << 1
+
+            self.unit['onewire'][key].update(temp=(raw / 16.0))
+            self.unit['onewire'][key].update(lastupdate=datetime.now())
+
+            del one
+
+    def dRead(self):
+
+        for key in self.unit['pir']:
+
+            pin = self.unit['pir'][key]['pin']
+
+            Arduino.pinMode(pin, Arduino.INPUT)
+            self.unit['pir'][key].update(state=Arduino.digitalRead(pin))
+
+    def pwmLcdBacklight(self, newState):
+
+        step = 25
+
+        if newState < self.unit['lcd'][0]['pwmState']:
+            step = -step
+            print ' In step - step', step
+        while self.unit['lcd'][0]['pwmState'] != newState:
+            print self.unit['lcd'][0]['pwmState']
+            self.unit['lcd'][0]['pwmState'] += step
+            Arduino.analogWrite(self.unit['lcd'][0]['backlightPin'],
+                                self.unit['lcd'][0]['pwmState'])
+
+        if (self.unit['lcd'][0]['pwmState'] > 128):
+
+            self.unit['lcd'][0]['backlightState'] = True
+            print 'b state', self.unit['lcd'][0]['backlightState']
+
+        else:
+
+            self.unit['lcd'][0]['backlightPin'] = False
+            print 'b state', self.unit['lcd'][0]['backlightState']
+
+    def pirBacklight(self):
+
+        pin = self.unit['pir']['0']['pin']
+        backlight = self.unit['lcd']['0']['backlightState']
+        state = self.dRead(pin)
+
+        if (state == 1 and not backlight):
+            self.pwmLcdBacklight(250)
+
+        if (state == 0 and backlight):
+            self.pwmLcdBacklight(0)
 
     @classmethod
     def allid(cls):
@@ -70,283 +328,45 @@ class database(object):
         db = dbcon.connect()
         cursor = db.cursor()
 
-        cursor.execute("SELECT id FROM units")
+        cursor.execute("SELECT id FROM unitts")
 
         for record in cursor:
-            obj = cls()
-            obj.aid = record[0]
-            result.append(obj)
+
+            result.append(cls.fromid(record[0]))
+
+        db = dbcon.connect()
+        cursor.close()
 
         return result
 
     @classmethod
-    def fromid(cls, aid):
+    def fromid(cls, aid, connect=False):
 
         obj = cls()
+        obj.unit = obj.get_eq_arduino_device(aid)
 
-        obj.aid = aid
+        obj.unit.update(onewire=obj.get_eq_onewire())
+        obj.unit.update(lcd=obj.get_eq_lcd())
+        obj.unit.update(pir=obj.get_eq_pir())
+        obj.unit.update(servo=obj.get_eq_servo())
+        obj._queue = Redis()
+        if connect:
+            obj.serialconnection()
 
         return obj
-
-
-class unit(object):
-
-    onewire = []
-    Lcd = None
-    device = None
-    aid = None
-    datab = None
-    autosave = False
-    backlight = False
-    temp_timer = 0
-    lcd_update_timer = 0
-    lcd_pir = None
-    pwm_pin_state = {}
-    tempC = {}
-    _oldlcddata = None
-    _conn = None
-
-    def __init__(self):
-
-            try:
-                pass
-
-            except:
-                print 'Connection failed to ', self.device
-
-    def lcdscreen(self, data):
-
-        lcd = Lcd((self.Lcd[1:7]), (self.Lcd[7:9]))
-
-        try:
-            for index, item in enumerate(data):
-                if index < 4:
-
-                    lcd.setCursor(0, index)
-                    lcd.printString('%s' % (item))
-
-                else:
-                    print 'To many rows to print, max 4'
-
-        except:
-            print 'Failed to write %s to addr %s' % data, self.lcd
-
-    def gettemp(self):
-
-        try:
-            for item in self.onewire:
-
-                data = []
-
-                one = OneWire(item[1])
-                one.reset()
-                one.select(item[0])
-                one.write(0x44, 1)
-                sleep(float(750) / 1000)
-                one.reset()
-                one.select(item[0])
-                one.write(0xBE)
-
-                for i in range(9):
-                    val = one.read()
-                    data.append(val)
-
-                raw = (data[1] << 8) | data[0]
-                """ leftshift data[1], binary OR data[0]
-                """
-                cfg = (data[4] & 0x60)
-
-                if cfg == 0x00:
-                    raw = raw << 3
-                elif cfg == 0x20:
-                    raw = raw << 2
-                elif cfg == 0x40:
-                    raw = raw << 1
-
-                self.tempC[item[2]] = {
-                    'addr': item[0],
-                    'temp': ((raw / 16.0)),
-                    'time': datetime.today()
-
-                }
-
-                one = None
-                """ Need this to reset the OneWire instance so a new
-                    read can be performed. There's probably another way
-                    to do this, but i dont feel like exploring that now.
-                """
-
-        except:
-
-                print 'Could not read sensordata'
-
-        if self.autosave:
-
-            self.datab.wr(self.tempC)
-
-        else:
-
-            pass
-
-    def pwm(self, val, state):
-
-        step = 25
-
-        if state < self.pwm_pin_state[val]['state']:
-            step = -step
-
-        else:
-
-            pass
-
-        while self.pwm_pin_state[val]['state'] != state:
-
-            self.pwm_pin_state[val]['state'] += step
-
-            Arduino.analogWrite(self.pwm_pin_state[val]['pin'],
-                                self.pwm_pin_state[val]['state'])
-
-    def dRead(self, pin):
-
-        Arduino.pinMode(pin, Arduino.INPUT)
-
-        return Arduino.digitalRead(pin)
-
-    def updatelcd(self):
-
-        lcddata = self.datab.getlcddata()
-
-        if lcddata != self._oldlcddata:
-
-            if (
-                (self.lcd_pir is None) and
-                any(self.pwm_pin_state) and
-                (not self.backlight)
-            ):
-
-                self.pwm('lcd', 250)
-
-                self.backlight = True
-
-            self.lcdscreen(lcddata)
-
-            self._oldlcddata = lcddata
-
-        elif (self.lcd_pir is None) & (self.backlight):
-
-            self.pwm('lcd', 0)
-
-            self.backlight = False
-
-    def pirbacklight(self):
-
-        pir_state = self.dRead(self.lcd_pir)
-
-        if (pir_state == 1) and (not self.backlight):
-
-            self.pwm('lcd', 250)
-
-            self.backlight = True
-
-        elif (pir_state == 0 and self.backlight):
-
-            self.pwm('lcd', 0)
-
-            self.backlight = False
 
     @classmethod
-    def device(cls, device):
+    def fromdevice(cls, device, connect=False):
 
         obj = cls()
+        obj.unit = obj.get_eq_arduino_id(device)
 
-        obj.device = device
-
-        db = dbcon.connect()
-        cursor = db.cursor()
-
-        cursor.execute("SELECT * FROM units WHERE device =%s",
-                       (device,))
-
-        arduino = cursor.fetchone()
-        obj.aid = arduino[0]
-        obj.autosave = arduino[3]
-        obj.temp_timer = timedelta(seconds=arduino[4])
-        obj.lcd_update_timer = timedelta(seconds=arduino[5])
-
-        cursor.execute("SELECT addr, pin, location FROM equipment WHERE"
-                       " id=%s and type=%s", (obj.aid, 'OneWire'))
-
-        for record in cursor:
-            print 'Onewire: ', record
-            obj.onewire.append(record)
-
-        try:
-
-            cursor.execute("SELECT addr FROM equipment WHERE"
-                           " id=%s and type=%s", (obj.aid, 'Lcd'))
-
-            obj.Lcd = cursor.fetchone()[0]
-            print 'Lcd: ', obj.Lcd
-
-            if len(obj.Lcd) == 9:
-
-                cls.pwm_pin_state['lcd'] = {
-                    'pin': obj.Lcd[0],
-                    'state': 0
-                }
-
-            cursor.execute("SELECT pin FROM equipment WHERE"
-                           " id=%s and type=%s and addr=%s",
-                           (obj.aid, 'Pir', ['Lcd']))
-            obj.lcd_pir = cursor.fetchone()[0]
-
-        except:
-            pass
-
-        cursor.close()
-        db.close()
-
-        obj._conn = serial_manager.connect(obj.device)
-        obj.datab = database.fromid(obj.aid)
+        obj.unit.update(onewire=obj.get_eq_onewire())
+        obj.unit.update(lcd=obj.get_eq_lcd())
+        obj.unit.update(pir=obj.get_eq_pir())
+        obj.unit.update(servo=obj.get_eq_servo())
+        obj._queue = Redis()
+        if connect:
+            obj.serialconnection()
 
         return obj
-
-
-def main():
-
-    device = sys.argv[1]
-    a1 = unit.device(device)
-
-    owtimer = datetime.now() + a1.temp_timer
-
-    nextlcdupdate = datetime.now() + a1.lcd_update_timer
-
-    while True:
-
-        print datetime.now()
-        print 'OneWire timer: ', owtimer
-        print 'Next lcd update :', nextlcdupdate
-
-        if owtimer <= datetime.now():
-
-            print 'Get temp'
-
-            a1.gettemp()
-
-            owtimer = datetime.now() + a1.temp_timer
-
-        if nextlcdupdate <= datetime.now():
-
-            a1.updatelcd()
-
-            nextlcdupdate = datetime.now() + a1.lcd_update_timer
-
-        if a1.lcd_pir:
-
-            a1.pirbacklight()
-
-        sleep(1)
-
-
-if __name__ == '__main__':
-    main()
