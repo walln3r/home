@@ -54,7 +54,7 @@ class aio(object):
             row = self._queue.lpop(self.unit['id'])
             if row is not None:
                 self.lcddata.insert(0, row)
-                print row
+
             else:
                 try:
                     self.lcddata = self.lcddata[0:4]
@@ -291,9 +291,9 @@ class aio(object):
 
         if newState < self.unit['lcd'][0]['pwmState']:
             step = -step
-            print ' In step - step', step
+
         while self.unit['lcd'][0]['pwmState'] != newState:
-            print self.unit['lcd'][0]['pwmState']
+
             self.unit['lcd'][0]['pwmState'] += step
             Arduino.analogWrite(self.unit['lcd'][0]['backlightPin'],
                                 self.unit['lcd'][0]['pwmState'])
@@ -301,12 +301,10 @@ class aio(object):
         if (self.unit['lcd'][0]['pwmState'] > 128):
 
             self.unit['lcd'][0]['backlightState'] = True
-            print 'b state', self.unit['lcd'][0]['backlightState']
 
         else:
 
             self.unit['lcd'][0]['backlightPin'] = False
-            print 'b state', self.unit['lcd'][0]['backlightState']
 
     def pirBacklight(self):
 
