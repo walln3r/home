@@ -6,6 +6,7 @@ from datetime import datetime
 from time import sleep
 from psycopg2 import extras
 from redis import Redis
+from rrdtool import update as rrd_update
 import dbcon
 
 
@@ -41,17 +42,21 @@ class aio(object):
             toqueue = (self.unit['onewire'][key]['location'] + ':'
                        ' ' + str(self.unit['onewire'][key]['temp']))
 
-            self._queue.rpush(self.unit['id'], toqueue)
+            self._queue.rpush(self.unit['lcd'][0]['addr'], toqueue)
 
         db.commit()
         cursor.close()
         db.close()
 
+        ret = rrd_update('/mnt/sda1/cubie/home/rrddata/outside.rrd', 'N:%s' %
+                         (self.unit['onewire'][0]['temp']))
+        print 'RET: ', ret
+
     def getlcddata(self):
 
         while True:
 
-            row = self._queue.lpop(self.unit['id'])
+            row = self._queue.lpop(self.unit['lcd'][0]['addr'])
             if row is not None:
                 self.lcddata.insert(0, row)
 
@@ -271,12 +276,13 @@ class aio(object):
             elif cfg == 0x40:
                 raw = raw << 1
 
+            time = datetime.now().strftime('%H:%M:%S')
             self.unit['onewire'][key].update(temp=(raw / 16.0))
-            self.unit['onewire'][key].update(lastupdate=datetime.now())
+            self.unit['onewire'][key].update(lastupdate=str(time))
 
             del one
 
-    def dRead(self):
+    def pirSense(self):
 
         for key in self.unit['pir']:
 
@@ -304,19 +310,31 @@ class aio(object):
 
         else:
 
-            self.unit['lcd'][0]['backlightPin'] = False
+            self.unit['lcd'][0]['backlightState'] = False
 
     def pirBacklight(self):
 
         pin = self.unit['pir']['0']['pin']
         backlight = self.unit['lcd']['0']['backlightState']
-        state = self.dRead(pin)
+        state = self.pirSense(pin)
 
         if (state == 1 and not backlight):
             self.pwmLcdBacklight(250)
 
         if (state == 0 and backlight):
             self.pwmLcdBacklight(0)
+
+    def msgQueue(self):
+
+        var = self._queue.lpop(self.unit['id'])
+
+        if var is not None:
+
+            print 'from in queue: ', var
+
+            if var == 'unit':
+
+                self._queue.rpush('web', str(self.unit))
 
     @classmethod
     def allid(cls):
@@ -326,14 +344,14 @@ class aio(object):
         db = dbcon.connect()
         cursor = db.cursor()
 
-        cursor.execute("SELECT id FROM unitts")
+        cursor.execute("SELECT id FROM units")
 
         for record in cursor:
 
             result.append(cls.fromid(record[0]))
 
-        db = dbcon.connect()
         cursor.close()
+        db.close()
 
         return result
 
