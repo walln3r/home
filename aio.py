@@ -28,29 +28,20 @@ class aio(object):
 
     def wr(self):
 
-        db = dbcon.connect()
-        cursor = db.cursor()
-
         for key in self.unit['onewire']:
 
-            cursor.execute("INSERT INTO sensordata (addr, data, time)"
-                           " VALUES (%s, %s, %s)",
-                           (self.unit['onewire'][key]['addr'],
-                            self.unit['onewire'][key]['temp'],
-                            self.unit['onewire'][key]['lastupdate']))
+            ds_name = (self.unit['location'] +
+                       self.unit['onewire'][key]['location'].replace(' ', ''))
+
+            temp = self.unit['onewire'][key]['temp']
 
             toqueue = (self.unit['onewire'][key]['location'] + ':'
-                       ' ' + str(self.unit['onewire'][key]['temp']))
+                       ' ' + str(temp))
 
             self._queue.rpush(self.unit['lcd'][0]['addr'], toqueue)
 
-        db.commit()
-        cursor.close()
-        db.close()
-
-        ret = rrd_update('/mnt/sda1/cubie/home/rrddata/outside.rrd', 'N:%s' %
-                         (self.unit['onewire'][0]['temp']))
-        print 'RET: ', ret
+            rrd_update('/home/cubie/python/aio/rrddata/temp.rrd',
+                       '-t', ds_name, 'N:%s' % (temp))
 
     def getlcddata(self):
 
@@ -74,7 +65,7 @@ class aio(object):
         db = dbcon.connect()
         cursor = db.cursor(cursor_factory=extras.DictCursor)
 
-        cursor.execute("SELECT * FROM unitts WHERE id =%s",
+        cursor.execute("SELECT * FROM units WHERE id =%s",
                        (aid,))
 
         for record in cursor:
@@ -276,8 +267,19 @@ class aio(object):
             elif cfg == 0x40:
                 raw = raw << 1
 
+            if raw < 2048:
+                temp = (raw / 16.0)
+            else:
+                print 'negative'
+                temp = raw - 1
+                print 'raw minus 1', raw
+                temp = ~ raw
+                print 'raw inverted', raw
+
+                temp = (-temp / 16.0)
+                print 'temp', temp
             time = datetime.now().strftime('%H:%M:%S')
-            self.unit['onewire'][key].update(temp=(raw / 16.0))
+            self.unit['onewire'][key].update(temp=(temp))
             self.unit['onewire'][key].update(lastupdate=str(time))
 
             del one
