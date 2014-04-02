@@ -33,15 +33,17 @@ class aio(object):
             ds_name = (self.unit['location'] +
                        self.unit['onewire'][key]['location'].replace(' ', ''))
 
-            temp = self.unit['onewire'][key]['temp']
+            temp = round(self.unit['onewire'][key]['temp'], 2)
 
             toqueue = (self.unit['onewire'][key]['location'] + ':'
                        ' ' + str(temp))
 
             self._queue.rpush(self.unit['lcd'][0]['addr'], toqueue)
 
-            rrd_update('/home/cubie/python/aio/rrddata/temp.rrd',
-                       '-t', ds_name, 'N:%s' % (temp))
+            r = rrd_update('/home/cubie/python/aio/rrddata/%s.rrd' % (ds_name),
+                           'N:%s' % (temp))
+            print r
+            print 'DSNAME: %s, TEMP: %s' % (ds_name, temp)
 
     def getlcddata(self):
 
@@ -270,14 +272,8 @@ class aio(object):
             if raw < 2048:
                 temp = (raw / 16.0)
             else:
-                print 'negative'
-                temp = raw - 1
-                print 'raw minus 1', raw
-                temp = ~ raw
-                print 'raw inverted', raw
+                temp = -((~raw & 0xffff) >> 2) / 16.0
 
-                temp = (-temp / 16.0)
-                print 'temp', temp
             time = datetime.now().strftime('%H:%M:%S')
             self.unit['onewire'][key].update(temp=(temp))
             self.unit['onewire'][key].update(lastupdate=str(time))
